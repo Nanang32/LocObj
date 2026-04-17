@@ -235,7 +235,7 @@ class EventLogger:
                 self._state[iid] = 'active'
                 sep()
                 cp(f"  [{ts()}]  < KEMBALI  ID {t['display_id']}  "
-                   f"off selama {fmt(miss_s)}", 'cy','b')
+                   f"KELUAR FRAME SELAMA {fmt(miss_s)}", 'cy','b')
 
         # Expire → siapa ID 1 baru
         for exp in expired_log:
@@ -337,7 +337,7 @@ def draw_tracks(frame, tracks):
 
         info_rows = [
             (f"Masuk : {enter_str}",           color,           (0,0,0)),
-            (f"ON    : {fmt(on_dur)}",          (0,180,60),      (255,255,255)),
+            (f"ON FRAME    : {fmt(on_dur)}",          (0,180,60),      (255,255,255)),
         ]
         if miss and off_cur < GRACE_SEC:
             remain = max(0.0, GRACE_SEC - off_cur)
