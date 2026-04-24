@@ -23,14 +23,14 @@ from pathlib import Path
 
 # Path ke file ZIP hasil export Label Studio
 # Contoh: r"C:\Users\Anda\Downloads\project-1-at-2025-04-23.zip"
-ZIP_PATH      = r"C:\Users\ASUS\Documents\LocObj\project-5-at-2026.zip"  # ← GANTI
+ZIP_PATH      = r"C:\Users\ASUS\Documents\LocObj\src\anotation-export\project-5-at-2026.zip"  # ← GANTI
 # project-5-at-2026-04-23-21-48-f1a4314d.zip
 # C:\Users\ASUS\Documents\LocObj\project-5-at-2026.zip
 
 
 # Folder tujuan ekstrak dan persiapan dataset
 # Script akan membuat folder ini secara otomatis
-DATASET_DIR   = r"C:\Users\ASUS\Documents\LocObj\dataset_kendaraan"                               # ← GANTI
+DATASET_DIR   = r"C:\Users\ASUS\Documents\LocObj\model\dataset_kendaraan"                               # ← GANTI
 
 # Nama class yang Anda pakai saat anotasi di Label Studio
 # Harus sama persis (case-sensitive) dengan nama label di Label Studio
