@@ -1,16 +1,16 @@
 """
 ╔══════════════════════════════════════════════════════════════════════╗
-║   TRAINING SCRIPT — Label Studio YOLO ZIP → RT-DETR                ║
+║   TRAINING SCRIPT — Roboflow YOLO ZIP → RT-DETR                    ║
 ║                                                                      ║
-║   Input  : file .zip hasil export Label Studio (format YOLO)        ║
+║   Input  : file .zip hasil export Roboflow (format YOLOv8)         ║
 ║   Output : model best.pt siap dipakai di v.py                      ║
 ║                                                                      ║
-║   Cara export di Label Studio:                                       ║
-║   Project → Export → YOLO → Download ZIP                           ║
+║   Cara export di Roboflow:                                          ║
+║   Project → Versions → Export Dataset → YOLOv8 → Download ZIP     ║
 ║                                                                      ║
 ║   Cara pakai script ini:                                             ║
-║   1. Isi KONFIGURASI di bawah                                       ║
-║   2. python train_labelstudio.py                                     ║
+║   1. Isi ZIP_PATH dan DATASET_DIR di bagian KONFIGURASI            ║
+║   2. python train.py                                                 ║
 ╚══════════════════════════════════════════════════════════════════════╝
 """
 
@@ -21,30 +21,28 @@ from pathlib import Path
 #  KONFIGURASI — SESUAIKAN SEBELUM MENJALANKAN
 # ═══════════════════════════════════════════════════════════════════
 
-# Path ke file ZIP hasil export Label Studio
-# Contoh: r"C:\Users\Anda\Downloads\project-1-at-2025-04-23.zip"
-ZIP_PATH      = r"C:\Users\ASUS\Documents\LocObj\src\anotation-export\project-5-at-2026.zip"  # ← GANTI
-# project-5-at-2026-04-23-21-48-f1a4314d.zip
-# C:\Users\ASUS\Documents\LocObj\project-5-at-2026.zip
+# Path ke file ZIP hasil export Roboflow (format YOLOv8)
+# Contoh: r"C:\Users\ASUS\Downloads\vehicle-detection.v1.yolov8.zip"
+ZIP_PATH      = r"C:\Users\ASUS\Documents\disertasi\LocObj\src\anotation-export\video.mobil.zip"         # ← GANTI
 
+# Folder tujuan ekstrak dan persiapan dataset (dibuat otomatis)
+DATASET_DIR   = r"C:\Users\ASUS\Documents\disertasi\LocObj\src\model\dataset\dataset_kendaraan"  # ← GANTI jika perlu
 
-# Folder tujuan ekstrak dan persiapan dataset
-# Script akan membuat folder ini secara otomatis
-DATASET_DIR   = r"C:\Users\ASUS\Documents\LocObj\model\dataset_kendaraan"                               # ← GANTI
-
-# Nama class yang Anda pakai saat anotasi di Label Studio
-# Harus sama persis (case-sensitive) dengan nama label di Label Studio
-# Satu class untuk semua kendaraan (belakang + depan)
-CLASS_NAMES   = ['carback', 'carfront']                                    # ← GANTI jika berbeda
+# Nama class — harus sama dengan nama class di Roboflow Anda
+# Roboflow akan otomatis dibaca dari data.yaml di dalam ZIP
+# Isi ini hanya sebagai fallback jika data.yaml tidak ditemukan
+CLASS_NAMES   = ['carback', 'carfront']                                    # ← sesuaikan
 
 # ── Parameter training ────────────────────────
 IMG_SIZE      = 640
 EPOCHS        = 60
 BATCH_SIZE    = 4        # 4GB VRAM→4 | 8GB→8 | 16GB→16
-NAMA_TRAINING = "vehicle_labelstudio_v1"
+NAMA_TRAINING = "vehicle_roboflow_v1"
 BASE_MODEL    = "rtdetr-l.pt"   # model pretrained — didownload otomatis jika belum ada
 
 # ── Split ratio ───────────────────────────────
+# Roboflow biasanya sudah split otomatis — variabel ini hanya dipakai
+# jika ZIP tidak memiliki struktur train/valid/test yang jelas
 RATIO_TRAIN   = 0.80   # 80% training
 RATIO_VALID   = 0.10   # 10% validasi
 # sisa 10% → test
@@ -93,10 +91,26 @@ def check_gpu():
         return 'cpu'
 
 # ═══════════════════════════════════════════════════════════════════
-#  LANGKAH 2 — EKSTRAK ZIP LABEL STUDIO
+#  LANGKAH 2 — EKSTRAK ZIP ROBOFLOW
+#
+#  Roboflow YOLOv8 ZIP memiliki struktur:
+#    train/
+#      images/  *.jpg
+#      labels/  *.txt
+#    valid/
+#      images/  *.jpg
+#      labels/  *.txt
+#    test/
+#      images/  *.jpg
+#      labels/  *.txt
+#    data.yaml  ← konfigurasi dataset lengkap (path + class names)
+#    README.roboflow.txt
+#
+#  Berbeda dengan Label Studio, Roboflow MENYERTAKAN gambar di ZIP
+#  dan sudah menyertakan data.yaml siap pakai.
 # ═══════════════════════════════════════════════════════════════════
 def extract_zip(zip_path: str, dataset_dir: Path) -> Path:
-    hdr("LANGKAH 2 — EKSTRAK ZIP LABEL STUDIO")
+    hdr("LANGKAH 2 — EKSTRAK ZIP ROBOFLOW")
 
     zp = Path(zip_path)
     if not zp.exists():
@@ -115,215 +129,186 @@ def extract_zip(zip_path: str, dataset_dir: Path) -> Path:
 
     with zipfile.ZipFile(zp, 'r') as zf:
         members = zf.namelist()
-        info(f"Jumlah file    : {len(members)}")
+        # Hitung gambar dan label di dalam ZIP
+        imgs = [m for m in members if m.lower().endswith(('.jpg','.jpeg','.png','.bmp','.webp'))]
+        lbls = [m for m in members if m.endswith('.txt') and 'classes' not in m.lower()]
+        info(f"Gambar di ZIP  : {len(imgs)}")
+        info(f"Label di ZIP   : {len(lbls)}")
+        if len(imgs) == 0:
+            err("ZIP tidak mengandung gambar!\n"
+                "     Pastikan Anda memilih format YOLOv8 saat export di Roboflow,\n"
+                "     bukan format lain seperti COCO JSON atau Pascal VOC.")
         zf.extractall(extract_dir)
 
     ok("Ekstrak selesai")
     return extract_dir
 
 # ═══════════════════════════════════════════════════════════════════
-#  LANGKAH 3 — ANALISIS STRUKTUR LABEL STUDIO YOLO
-#
-#  Label Studio YOLO ZIP bisa menghasilkan berbagai struktur:
-#
-#  Struktur A (paling umum — Label Studio terbaru):
-#    images/
-#      train/  *.jpg
-#      val/    *.jpg
-#    labels/
-#      train/  *.txt
-#      val/    *.txt
-#    classes.txt
-#    notes.json
-#
-#  Struktur B (flat):
-#    *.jpg, *.txt, classes.txt  (semua di root)
-#
-#  Struktur C (sub-folder per class):
-#    obj_train_data/
-#      *.jpg, *.txt
-#    obj_valid_data/
-#      *.jpg, *.txt
-#    obj.data
-#    obj.names
-#
-#  Script ini mendeteksi dan menangani ketiga struktur otomatis.
+#  LANGKAH 3 — BACA data.yaml DARI ROBOFLOW
 # ═══════════════════════════════════════════════════════════════════
-def detect_ls_structure(extract_dir: Path) -> str:
+def read_roboflow_yaml(extract_dir: Path) -> tuple:
     """
-    Deteksi struktur ZIP Label Studio.
-    Returns: 'ls_split' | 'ls_flat' | 'ls_obj' | 'unknown'
+    Baca data.yaml yang disertakan Roboflow di dalam ZIP.
+    Returns: (classes_list, yaml_data_dict)
+    Roboflow sudah menyertakan path train/valid/test dan class names.
     """
-    # Struktur A: ada folder images/train dan labels/train
-    if ((extract_dir/'images'/'train').exists() or
-        (extract_dir/'images'/'val').exists()):
-        return 'ls_split'
+    yaml_candidates = list(extract_dir.rglob('data.yaml'))
+    if not yaml_candidates:
+        warn("data.yaml tidak ditemukan di ZIP — akan dibuat dari CLASS_NAMES")
+        return CLASS_NAMES, None
 
-    # Struktur C: ada obj_train_data atau obj_valid_data
-    obj_dirs = list(extract_dir.rglob('obj_train_data'))
-    if obj_dirs:
-        return 'ls_obj'
+    yaml_path = yaml_candidates[0]
+    ok(f"data.yaml ditemukan : {yaml_path.relative_to(extract_dir)}")
 
-    # Struktur B: cari gambar di root atau satu level bawah
-    imgs = list(extract_dir.rglob('*.jpg')) + list(extract_dir.rglob('*.png'))
-    if imgs:
-        return 'ls_flat'
+    with open(yaml_path, 'r', encoding='utf-8') as f:
+        data = yaml.safe_load(f)
 
-    return 'unknown'
-
-# ═══════════════════════════════════════════════════════════════════
-#  LANGKAH 4 — BACA classes.txt / obj.names
-# ═══════════════════════════════════════════════════════════════════
-def read_classes(extract_dir: Path) -> list:
-    """
-    Baca nama class dari file classes.txt atau obj.names di ZIP.
-    Returns daftar nama class sesuai urutan index.
-    """
-    candidates = (
-        list(extract_dir.rglob('classes.txt')) +
-        list(extract_dir.rglob('obj.names'))   +
-        list(extract_dir.rglob('*.names'))
-    )
-    if not candidates:
-        warn("File classes.txt / obj.names tidak ditemukan di ZIP")
-        warn(f"Menggunakan CLASS_NAMES dari konfigurasi: {CLASS_NAMES}")
-        return CLASS_NAMES
-
-    cls_file = candidates[0]
-    lines = [l.strip() for l in cls_file.read_text(encoding='utf-8').splitlines()
-             if l.strip()]
-    ok(f"Class dari ZIP : {lines}  (file: {cls_file.name})")
+    classes = data.get('names', CLASS_NAMES)
+    nc      = data.get('nc', len(classes))
+    ok(f"Class dari Roboflow : {classes}  (nc={nc})")
 
     # Validasi terhadap CLASS_NAMES di konfigurasi
-    if lines != CLASS_NAMES:
-        warn(f"Class di ZIP   : {lines}")
-        warn(f"CLASS_NAMES    : {CLASS_NAMES}")
-        warn("Perbedaan nama class — menggunakan class dari ZIP")
-        return lines
-    return lines
+    if sorted(classes) != sorted(CLASS_NAMES):
+        warn(f"Class di ZIP    : {classes}")
+        warn(f"CLASS_NAMES     : {CLASS_NAMES}")
+        warn("Menggunakan class dari ZIP Roboflow")
+
+    return classes, data
+
+# ═══════════════════════════════════════════════════════════════════
+#  LANGKAH 4 — BACA classes.txt (fallback)
+# ═══════════════════════════════════════════════════════════════════
+def read_classes(extract_dir: Path) -> list:
+    """Fallback jika data.yaml tidak ada."""
+    candidates = list(extract_dir.rglob('classes.txt'))
+    if not candidates:
+        warn(f"classes.txt tidak ditemukan — pakai CLASS_NAMES: {CLASS_NAMES}")
+        return CLASS_NAMES
+    lines = [l.strip() for l in candidates[0].read_text(encoding='utf-8').splitlines() if l.strip()]
+    ok(f"Class dari classes.txt : {lines}")
+    return lines if lines else CLASS_NAMES
 
 # ═══════════════════════════════════════════════════════════════════
 #  LANGKAH 5 — NORMALISASI DATASET KE STRUKTUR YOLOV8
 #
-#  Target struktur yang diinginkan:
-#    dataset_dir/
-#      train/images/*.jpg
-#      train/labels/*.txt
-#      valid/images/*.jpg
-#      valid/labels/*.txt
-#      test/images/*.jpg
-#      test/labels/*.txt
-#      data.yaml
+#  Roboflow sudah pakai struktur YOLOv8 — fungsi ini hanya
+#  memastikan folder train/valid/test ada dan merapikan path.
+#  Jika struktur sudah benar, data langsung dipakai tanpa copy.
 # ═══════════════════════════════════════════════════════════════════
 def collect_pairs(extract_dir: Path) -> list:
-    """
-    Kumpulkan semua pasangan (gambar, label) dari extract_dir.
-    Returns list of (img_path, lbl_path).
-    """
     img_exts = {'.jpg','.jpeg','.png','.bmp','.webp'}
     pairs    = []
-    all_imgs = []
     for ext in img_exts:
-        all_imgs.extend(extract_dir.rglob(f'*{ext}'))
-
-    for img in all_imgs:
-        # Cari label .txt dengan nama stem sama
-        lbl = img.with_suffix('.txt')
-        if not lbl.exists():
-            # Coba di folder labels/ sejajar dengan folder images/
-            parts = img.parts
-            for i, part in enumerate(parts):
-                if part.lower() in ('images','image','imgs'):
-                    lbl_parts = list(parts)
-                    lbl_parts[i] = 'labels'
-                    lbl = Path(*lbl_parts).with_suffix('.txt')
-                    break
-        if lbl.exists():
-            pairs.append((img, lbl))
-        else:
-            warn(f"Label tidak ada untuk: {img.name} — dilewati")
-
+        for img in extract_dir.rglob(f'*{ext}'):
+            lbl = img.with_suffix('.txt')
+            if not lbl.exists():
+                parts = list(img.parts)
+                for i, part in enumerate(parts):
+                    if part.lower() in ('images','image','imgs'):
+                        parts[i] = 'labels'
+                        lbl = Path(*parts).with_suffix('.txt')
+                        break
+            if lbl.exists():
+                pairs.append((img, lbl))
+            else:
+                warn(f"Label tidak ada: {img.name} — dilewati")
     return pairs
 
 
 def normalize_dataset(extract_dir: Path, dataset_dir: Path, classes: list) -> Path:
     hdr("LANGKAH 5 — NORMALISASI STRUKTUR DATASET")
 
-    structure = detect_ls_structure(extract_dir)
-    info(f"Struktur ZIP terdeteksi: {structure}")
+    # ── Cek apakah Roboflow sudah split train/valid/test ─────────
+    has_train = (extract_dir/'train'/'images').exists()
+    has_valid = (extract_dir/'valid'/'images').exists()
+    has_test  = (extract_dir/'test'/'images').exists()
 
-    # ── Kasus struktur A: sudah displit Label Studio ──────────────
-    if structure == 'ls_split':
-        info("Label Studio sudah membagi train/val — mapping ke train/valid/test")
-        pairs_train, pairs_val = [], []
+    if has_train and has_valid:
+        ok("Struktur Roboflow terdeteksi: train/valid/test sudah ada")
+        splits_src = {
+            'train': extract_dir/'train',
+            'valid': extract_dir/'valid',
+        }
+        if has_test:
+            splits_src['test'] = extract_dir/'test'
+        else:
+            # Jika tidak ada folder test, bagi valid 50/50
+            warn("Folder test/ tidak ada — membagi valid menjadi valid+test (50/50)")
 
-        for split_src, split_dst in [('train','train'),('val','valid')]:
-            img_dir = extract_dir/'images'/split_src
-            lbl_dir = extract_dir/'labels'/split_src
-            if not img_dir.exists(): continue
-            for img in img_dir.iterdir():
-                if img.suffix.lower() in {'.jpg','.jpeg','.png','.bmp','.webp'}:
-                    lbl = lbl_dir/(img.stem+'.txt') if lbl_dir.exists() else img.with_suffix('.txt')
-                    if lbl.exists():
-                        (pairs_train if split_dst=='train' else pairs_val).append((img,lbl))
-                    else:
-                        warn(f"Label tidak ada: {img.name}")
+        total = 0
+        for split_name, src_dir in splits_src.items():
+            out_img = dataset_dir/split_name/'images'
+            out_lbl = dataset_dir/split_name/'labels'
+            out_img.mkdir(parents=True, exist_ok=True)
+            out_lbl.mkdir(parents=True, exist_ok=True)
+            src_img = src_dir/'images'
+            src_lbl = src_dir/'labels'
+            count = 0
+            if src_img.exists():
+                for img in src_img.iterdir():
+                    if img.suffix.lower() in {'.jpg','.jpeg','.png','.bmp','.webp'}:
+                        shutil.copy2(img, out_img/img.name)
+                        lbl = src_lbl/(img.stem+'.txt') if src_lbl.exists() else None
+                        if lbl and lbl.exists():
+                            shutil.copy2(lbl, out_lbl/(img.stem+'.txt'))
+                        count += 1
+            total += count
+            info(f"  {split_name:5s}: {count:4d} gambar")
 
-        # Bagi pairs_val → 50% valid 50% test
-        random.seed(42); random.shuffle(pairs_val)
-        mid = max(1, len(pairs_val)//2)
-        splits = {'train': pairs_train,
-                  'valid': pairs_val[:mid],
-                  'test':  pairs_val[mid:]}
+        # Buat folder test jika belum ada dengan split dari valid
+        if not has_test:
+            valid_imgs = list((dataset_dir/'valid'/'images').glob('*.*'))
+            random.seed(42); random.shuffle(valid_imgs)
+            mid = len(valid_imgs)//2
+            test_img_dir = dataset_dir/'test'/'images'
+            test_lbl_dir = dataset_dir/'test'/'labels'
+            test_img_dir.mkdir(parents=True, exist_ok=True)
+            test_lbl_dir.mkdir(parents=True, exist_ok=True)
+            for img in valid_imgs[mid:]:
+                shutil.move(str(img), test_img_dir/img.name)
+                lbl = dataset_dir/'valid'/'labels'/(img.stem+'.txt')
+                if lbl.exists():
+                    shutil.move(str(lbl), test_lbl_dir/(img.stem+'.txt'))
+            info(f"  test : {len(valid_imgs)-mid:4d} gambar (dipindah dari valid)")
+            info(f"  valid: {mid:4d} gambar (setelah split)")
 
-    # ── Kasus struktur B/C: flat atau obj_*_data ──────────────────
     else:
+        # Fallback: koleksi semua gambar+label lalu split manual
+        warn("Struktur Roboflow tidak terdeteksi — split manual 80/10/10")
         all_pairs = collect_pairs(extract_dir)
         if not all_pairs:
             err("Tidak ada pasangan gambar+label ditemukan di ZIP!\n"
-                "     Pastikan Anda mengekspor format YOLO dari Label Studio.")
+                "     Pastikan Anda mengekspor format YOLOv8 dari Roboflow.")
         random.seed(42); random.shuffle(all_pairs)
         n  = len(all_pairs)
         nt = max(1, int(n * RATIO_TRAIN))
         nv = max(1, int(n * RATIO_VALID))
-        splits = {'train': all_pairs[:nt],
-                  'valid': all_pairs[nt:nt+nv],
-                  'test':  all_pairs[nt+nv:]}
+        splits = {'train': all_pairs[:nt], 'valid': all_pairs[nt:nt+nv], 'test': all_pairs[nt+nv:]}
+        total  = n
+        for split_name, pairs in splits.items():
+            out_img = dataset_dir/split_name/'images'
+            out_lbl = dataset_dir/split_name/'labels'
+            out_img.mkdir(parents=True, exist_ok=True)
+            out_lbl.mkdir(parents=True, exist_ok=True)
+            for img, lbl in pairs:
+                shutil.copy2(img, out_img/img.name)
+                shutil.copy2(lbl, out_lbl/(img.stem+'.txt'))
+            info(f"  {split_name:5s}: {len(pairs):4d} gambar ({len(pairs)/max(total,1)*100:.0f}%)")
 
-    # ── Salin ke struktur YOLOv8 bersih ──────────────────────────
-    total = sum(len(v) for v in splits.values())
-    info(f"Total gambar berlabel: {total}")
-
-    if total < 10:
-        warn(f"Hanya {total} gambar — lanjutkan anotasi di Label Studio")
-        warn("Jalankan script ini lagi setelah anotasi bertambah")
-
-    for split_name, pairs in splits.items():
-        out_img = dataset_dir/split_name/'images'
-        out_lbl = dataset_dir/split_name/'labels'
-        out_img.mkdir(parents=True, exist_ok=True)
-        out_lbl.mkdir(parents=True, exist_ok=True)
-        for img, lbl in pairs:
-            shutil.copy2(img, out_img/img.name)
-            shutil.copy2(lbl, out_lbl/(img.stem+'.txt'))
-        info(f"  {split_name:5s}: {len(pairs):4d} gambar ({len(pairs)/max(total,1)*100:.0f}%)")
+    if total < 50:
+        warn(f"Hanya {total} gambar — lanjutkan anotasi di Roboflow untuk hasil lebih baik")
+        warn("Direkomendasikan minimal 1.000 gambar untuk mencegah overfitting")
 
     ok("Normalisasi selesai")
     return dataset_dir
 
 
 def remap_label_indices(dataset_dir: Path, zip_classes: list, target_classes: list):
-    """
-    Jika urutan class di ZIP berbeda dengan CLASS_NAMES,
-    remap index di semua file .txt secara otomatis.
-    """
     if zip_classes == target_classes:
-        return  # tidak perlu remap
-
+        return
     hdr("REMAP CLASS INDEX")
     warn(f"Class ZIP    : {zip_classes}")
     warn(f"Class target : {target_classes}")
-
     mapping = {}
     for new_idx, name in enumerate(target_classes):
         if name in zip_classes:
@@ -331,23 +316,18 @@ def remap_label_indices(dataset_dir: Path, zip_classes: list, target_classes: li
             mapping[old_idx] = new_idx
             info(f"  index {old_idx} ({name}) → index {new_idx}")
         else:
-            warn(f"  Class '{name}' tidak ada di ZIP — akan hilang dari label")
-
+            warn(f"  Class '{name}' tidak ada di ZIP")
     for lbl_file in dataset_dir.rglob('*.txt'):
-        if lbl_file.name == 'classes.txt': continue
+        if lbl_file.name in ('classes.txt','data.yaml'): continue
         lines = lbl_file.read_text(encoding='utf-8').splitlines()
         new_lines = []
         for line in lines:
             parts = line.strip().split()
             if not parts: continue
-            old = int(parts[0])
-            new = mapping.get(old)
-            if new is None:
-                warn(f"Index {old} tidak dikenali di {lbl_file.name} — baris dilewati")
-                continue
+            new = mapping.get(int(parts[0]))
+            if new is None: continue
             new_lines.append(f"{new} " + " ".join(parts[1:]))
         lbl_file.write_text("\n".join(new_lines)+"\n", encoding='utf-8')
-
     ok("Remap index selesai")
 
 # ═══════════════════════════════════════════════════════════════════
@@ -385,7 +365,7 @@ def validate_labels(dataset_dir: Path, classes: list):
     if errors == 0:
         ok("Semua label valid ✓")
     else:
-        warn(f"Ditemukan {errors} baris bermasalah — periksa anotasi di Label Studio")
+        warn(f"Ditemukan {errors} baris bermasalah — periksa anotasi di Roboflow")
 
 # ═══════════════════════════════════════════════════════════════════
 #  LANGKAH 7 — BUAT data.yaml
@@ -520,7 +500,7 @@ def print_deploy(classes: list):
         print(c("  Ubah bagian KONFIGURASI di v.py:", 'cyan'))
         print()
         print(c(f"  MODEL_PATH    = r'{best.resolve()}'", 'yellow'))
-        print(c(f"  CAR_CLASS_IDS = {{0}}   # satu class: {classes[0] if classes else 'vehicle'}", 'yellow'))
+        print(c(f"  CAR_CLASS_IDS = {{0, 1}}   # 0={classes[0] if len(classes)>0 else 'carback'}, 1={classes[1] if len(classes)>1 else 'carfront'}", 'yellow'))
         print()
         log("Garis pembagi zona (LANE_SPLIT_POS) tidak perlu diubah.", 'gray')
         log("Tekan L di v.py untuk kalibrasi visual posisi garis zona.", 'gray')
@@ -533,8 +513,8 @@ def print_deploy(classes: list):
 # ═══════════════════════════════════════════════════════════════════
 def main():
     sep()
-    log("LABEL STUDIO YOLO ZIP → RT-DETR TRAINING PIPELINE", 'bold')
-    log(f"ZIP Input : {ZIP_PATH}", 'cyan')
+    log("ROBOFLOW YOLO ZIP → RT-DETR TRAINING PIPELINE", 'bold')
+    log(f"ZIP Input  : {ZIP_PATH}", 'cyan')
     log(f"Dataset   : {DATASET_DIR}", 'cyan')
     log(f"Class     : {CLASS_NAMES}", 'cyan')
     log(f"Split     : Train {RATIO_TRAIN*100:.0f}% / "
@@ -548,22 +528,26 @@ def main():
     # 1. GPU
     device = check_gpu()
 
-    # 2. Ekstrak ZIP
+    # 2. Ekstrak ZIP Roboflow
     extract_dir = extract_zip(ZIP_PATH, dataset_dir)
 
-    # 3-4. Baca class dari ZIP
-    zip_classes = read_classes(extract_dir)
+    # 3. Baca data.yaml + class dari Roboflow ZIP
+    zip_classes, rf_yaml = read_roboflow_yaml(extract_dir)
 
-    # 5. Normalisasi struktur
+    # 4. Fallback baca classes.txt jika data.yaml tidak ada
+    if not zip_classes:
+        zip_classes = read_classes(extract_dir)
+
+    # 5. Normalisasi/copy dataset ke DATASET_DIR
     normalize_dataset(extract_dir, dataset_dir, zip_classes)
 
-    # 5b. Remap index jika class berbeda urutan
+    # 5b. Remap index class jika urutan berbeda
     remap_label_indices(dataset_dir, zip_classes, CLASS_NAMES)
 
     # 6. Validasi label
     validate_labels(dataset_dir, CLASS_NAMES)
 
-    # 7. Buat data.yaml
+    # 7. Buat data.yaml final di DATASET_DIR
     yaml_path = make_yaml(dataset_dir, CLASS_NAMES)
 
     # 8. Training
