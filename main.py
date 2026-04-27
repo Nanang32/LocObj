@@ -49,7 +49,7 @@ from ultralytics import RTDETR
 #  Taruh best.pt satu folder dengan main.py, ATAU isi path lengkap:
 #  MODEL_PATH = r"C:\Users\ASUS\Documents\disertasi\LocObj\runs\detect\vehicle_roboflow_v1\weights\best.pt"
 #
-MODEL_PATH =r"C:\Users\ASUS\Documents\disertasi\LocObj\runs\detect\vehicle_roboflow_v1-2\weights\best.pt"
+MODEL_PATH =r"C:\Users\ASUS\Documents\disertasi\LocObj\src\model\weight-v2\best.pt"
 
 # ── Class dari model custom (sesuai urutan di Roboflow) ───────────────
 #  0 = carback  → body belakang kendaraan
