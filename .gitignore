@@ -1,2 +1,7 @@
 *.xlsx
 !ImportantData.xlsx
+runs/
+src/anotation-export
+src/csv-output
+src/frame-set
+src/model
