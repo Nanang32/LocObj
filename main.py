@@ -49,10 +49,7 @@ from ultralytics import RTDETR
 #  Taruh best.pt satu folder dengan main.py, ATAU isi path lengkap:
 #  MODEL_PATH = r"C:\Users\ASUS\Documents\disertasi\LocObj\runs\detect\vehicle_roboflow_v1\weights\best.pt"
 #
-# MODEL_PATH = 'best.pt'
-MODEL_PATH = r"C:\Users\ASUS\Documents\disertasi\LocObj\runs\detect\vehicle_roboflow_v1-2\weights\best.pt"
-
-
+MODEL_PATH =r"C:\Users\ASUS\Documents\disertasi\LocObj\runs\detect\vehicle_roboflow_v1-2\weights\best.pt"
 
 # ── Class dari model custom (sesuai urutan di Roboflow) ───────────────
 #  0 = carback  → body belakang kendaraan
@@ -645,7 +642,7 @@ def draw_tracks(frame, tracks):
         cv2.circle(frame, (cx, cy), 4, color, -1)
 
 
-def draw_hud(frame, tracks, model_name):
+def draw_hud(frame, tracks, model_name, fps_display=0.0):
     """HUD atas dan bawah frame."""
     now  = time.time()
     fh, fw = frame.shape[:2]
@@ -659,6 +656,14 @@ def draw_hud(frame, tracks, model_name):
                 f"Grace: {GRACE_SEC:.0f}s  |  [Q]Keluar [R]Reset",
                 (8, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.40,
                 (200, 200, 200), 1, cv2.LINE_AA)
+
+    # FPS + device info di pojok kanan atas
+    fps_color = (0, 255, 100) if fps_display >= 20 else (0, 200, 255) if fps_display >= 10 else (0, 100, 255)
+    fps_txt   = f"{fps_display:.1f} FPS"
+    (fw_txt, _), _ = cv2.getTextSize(fps_txt, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 2)
+    cv2.putText(frame, fps_txt,
+                (fw - fw_txt - 10, 24),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.55, fps_color, 2, cv2.LINE_AA)
 
     # Bar bawah — ringkasan semua track aktif
     if tracks:
@@ -715,10 +720,33 @@ def main():
     ok_model_name = Path(model_path).name
     cp(f"  Model dimuat: {model_path}", 'gr', 'b')
 
+    # ── Deteksi dan aktifkan GPU otomatis ────────────────────────────
+    import torch
+    if torch.cuda.is_available():
+        device    = 0   # GPU index 0
+        gpu_name  = torch.cuda.get_device_name(0)
+        vram_gb   = torch.cuda.get_device_properties(0).total_memory / 1e9
+        # Fix cuDNN untuk CUDA 12.8 + Python 3.14
+        torch.backends.cudnn.enabled          = False
+        torch.backends.cudnn.benchmark        = False
+        torch.backends.cuda.matmul.allow_tf32 = False
+        if hasattr(torch.backends.cudnn, "allow_tf32"):
+            torch.backends.cudnn.allow_tf32   = False
+        cp(f"  Device : GPU — {gpu_name}  ({vram_gb:.1f} GB VRAM)", 'gr', 'b')
+        cp("  cuDNN  : dinonaktifkan (stabil untuk CUDA 12.8)", 'gy')
+    else:
+        device = "cpu"
+        cp("  Device : CPU — GPU tidak terdeteksi (inferensi lambat)", 'yw')
+        cp("  Pastikan PyTorch CUDA terinstall: pip install torch --index-url https://download.pytorch.org/whl/cu124", 'yw')
+
     # ── Inisialisasi
-    csv_filename = f"tracking_log_{time.strftime('%Y%m%d_%H%M%S')}.csv"
-    csv_logger   = CSVLogger(csv_filename)
+    # ── Output CSV ke folder src\csv-output\ ──────────────────────────
+    csv_dir  = Path(__file__).parent / "src" / "csv-output"
+    csv_dir.mkdir(parents=True, exist_ok=True)   # buat folder jika belum ada
+    csv_filename = csv_dir / f"tracking_log_{time.strftime('%Y%m%d_%H%M%S')}.csv"
+    csv_logger   = CSVLogger(str(csv_filename))
     model        = RTDETR(model_path)
+    model.to(device)   # pindahkan model ke GPU atau CPU
     manager      = IDManager()
     ev_logger    = EventLogger(csv_logger)
 
@@ -726,19 +754,36 @@ def main():
     if not cap.isOpened():
         cp("  Kamera tidak ditemukan.", 'rd'); return
 
+    # ── Resolusi kamera dikunci ke 640×640 standar RT-DETR ────────────
+    # imgsz=640 adalah standar input model RT-DETR — tidak diubah
+    # Ini memastikan frame yang masuk ke model konsisten dengan training
+    DISP_W = 640
+    DISP_H = 640
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH,  DISP_W)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, DISP_H)
+
+    cam_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    cam_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    cp(f"  Resolusi kamera : {cam_w}×{cam_h} px  (standar RT-DETR 640)", 'cy')
+
     WIN = f"Vehicle Tracker — {ok_model_name}"
-    # Buat jendela tampilan
-    # cv2.WINDOW_NORMAL memungkinkan resize — fallback ke 0 jika tidak support
     try:
         cv2.namedWindow(WIN, cv2.WINDOW_NORMAL)
+        cv2.resizeWindow(WIN, DISP_W, DISP_H)
     except cv2.error:
         try:
             cv2.namedWindow(WIN, 0)
+            cv2.resizeWindow(WIN, DISP_W, DISP_H)
         except cv2.error as e:
             cp(f"  OpenCV GUI error: {e}", 'rd')
             cp("  Install: pip uninstall opencv-python-headless -y && pip install opencv-python", 'yw')
             return
     sep()
+
+    # ── FPS counter ───────────────────────────────────────────────────
+    fps_counter = 0
+    fps_display = 0.0
+    fps_timer   = time.time()
 
     try:
         while cap.isOpened():
@@ -746,6 +791,13 @@ def main():
             if not ret: break
 
             fh, fw = frame.shape[:2]
+
+            # Hitung FPS setiap 1 detik
+            fps_counter += 1
+            if time.time() - fps_timer >= 1.0:
+                fps_display = fps_counter / (time.time() - fps_timer)
+                fps_counter = 0
+                fps_timer   = time.time()
 
             # ── Deteksi dengan best.pt
             #    Model hanya mengenal carback(0) dan carfront(1).
@@ -788,7 +840,7 @@ def main():
 
             # ── Gambar hasil ke frame
             draw_tracks(frame, tracks)
-            draw_hud(frame, tracks, ok_model_name)
+            draw_hud(frame, tracks, ok_model_name, fps_display)
 
             cv2.imshow(WIN, frame)
 
