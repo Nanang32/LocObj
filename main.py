@@ -49,7 +49,9 @@ from ultralytics import RTDETR
 #  Taruh best.pt satu folder dengan main.py, ATAU isi path lengkap:
 #  MODEL_PATH = r"C:\Users\ASUS\Documents\disertasi\LocObj\runs\detect\vehicle_roboflow_v1\weights\best.pt"
 #
-MODEL_PATH =r"C:\Users\ASUS\Documents\disertasi\LocObj\src\model\weight-v2\best.pt"
+MODEL_PATH = r"C:\Users\ASUS\Documents\disertasi\LocObj\src\model\weight-v2\best.pt"
+
+# C:\Users\ASUS\Documents\disertasi\LocObj\src\model\weight-v2
 
 # ── Class dari model custom (sesuai urutan di Roboflow) ───────────────
 #  0 = carback  → body belakang kendaraan
@@ -73,10 +75,11 @@ CONF_THRESHOLD = 0.35
 #    Konversi mm menghasilkan angka lebih besar → range berbeda.
 #    Sesuaikan WIDTH_FRONT_MIN/MAX dengan kondisi lapangan Anda.
 #
-WIDTH_BACK_MIN_MM  = 3000.0   # carback minimum (mm) — body belakang, ID 1 terkunci
-WIDTH_BACK_MAX_MM  = 9999.0   # carback maximum (mm) — tidak ada batas atas (semua jarak)
-WIDTH_FRONT_MIN_MM = 4000.0   # carfront minimum (mm) — jalur berlawanan
-WIDTH_FRONT_MAX_MM = 5000.0   # carfront maximum (mm) — jalur berlawanan
+WIDTH_BACK_MIN_MM  = 0.0
+WIDTH_BACK_MAX_MM  = 999999.0
+WIDTH_FRONT_MIN_MM = 0.0
+WIDTH_FRONT_MAX_MM = 999999.0
+#test
 
 # ── Konversi pixel ke mm ──────────────────────────────────────────────
 #  Satu nilai PIXEL_PER_MM dipakai untuk kedua class.
@@ -100,19 +103,33 @@ W_APP     = 0.20   # bobot kemiripan warna/appearance
 MIN_MATCH = 0.30   # skor minimum untuk matching track
 MAX_DIST  = 400    # jarak pixel maksimum untuk matching
 
+# ── Deteksi gerakan (motion filter) ──────────────────────────────────
+#  Kendaraan statis/parkir diabaikan — hanya kendaraan BERGERAK
+#  yang diterima sebagai track valid.
+#
+#  MOTION_MIN_PX   : pergerakan centroid minimum (pixel) antar frame
+#                    agar objek dianggap bergerak.
+#                    Terlalu kecil → kendaraan parkir lolos
+#                    Terlalu besar → kendaraan lambat tidak terdeteksi
+#                    Rekomendasi: 3–8 pixel untuk kamera statis
+#
+#  MOTION_MIN_FRAMES : berapa frame berturut-turut objek harus bergerak
+#                      sebelum dianggap kendaraan moving (bukan noise)
+#                      Rekomendasi: 3–5 frame
+#
+#  MOTION_HISTORY   : berapa frame terakhir yang disimpan untuk
+#                     menghitung rata-rata kecepatan gerak
+MOTION_MIN_PX     = 5    # pixel minimum pergerakan per frame
+MOTION_MIN_FRAMES = 3    # frame bergerak minimum sebelum valid
+MOTION_HISTORY    = 8    # frame history untuk hitung kecepatan
+
 # ══════════════════════════════════════════════════════════════════════
 #  WARNA TAMPILAN
 # ══════════════════════════════════════════════════════════════════════
 #  ID 1 (objek terlama/terkunci) → cyan
 #  ID 2, 3, ... → warna bergilir
-COLORS = [
-    (0, 220, 255),   # ID 1 — cyan
-    (0, 255, 120),   # ID 2 — hijau
-    (255, 180, 0),   # ID 3 — kuning
-    (200, 80, 255),  # ID 4 — ungu
-    (255, 80, 80),   # ID 5 — merah
-    (80, 180, 255),  # ID 6 — biru
-]
+COLOR_ID1    = (0, 255, 255)    # ID 1 — kuning (terkunci)
+COLOR_OTHERS = (128, 128, 128)  # ID 2, 3, ... — abu-abu
 
 # ══════════════════════════════════════════════════════════════════════
 #  TERMINAL HELPER
@@ -186,6 +203,56 @@ def mscore(track, bbox, app):
     return (W_IOU * iou(track['bbox'], bbox)
           + W_DIST * (1 - ndist(track['bbox'], bbox))
           + W_APP  * app_sim(track['appearance'], app))
+
+
+def is_moving(track) -> bool:
+    """
+    Cek apakah objek sedang bergerak berdasarkan riwayat posisi centroid.
+    Returns True jika objek dianggap moving (bukan statis/parkir).
+
+    Logika:
+    - Simpan riwayat centroid MOTION_HISTORY frame terakhir
+    - Hitung total perpindahan (displacement) dalam window tersebut
+    - Jika rata-rata perpindahan per frame >= MOTION_MIN_PX
+      DAN sudah bergerak minimal MOTION_MIN_FRAMES frame → moving
+    """
+    history = track.get('centroid_history', [])
+    if len(history) < MOTION_MIN_FRAMES:
+        return True   # belum cukup data → anggap moving (beri kesempatan)
+
+    # Hitung perpindahan tiap langkah dalam history
+    moves = []
+    for i in range(1, len(history)):
+        dx = history[i][0] - history[i-1][0]
+        dy = history[i][1] - history[i-1][1]
+        moves.append(np.hypot(dx, dy))
+
+    if not moves:
+        return True
+
+    avg_move = sum(moves) / len(moves)   # rata-rata pixel per frame
+    return avg_move >= MOTION_MIN_PX
+
+
+def update_centroid_history(track):
+    """Tambah posisi centroid sekarang ke riwayat track."""
+    cx, cy = centroid(track['bbox'])
+    history = track.setdefault('centroid_history', [])
+    history.append((cx, cy))
+    # Pertahankan hanya MOTION_HISTORY frame terakhir
+    if len(history) > MOTION_HISTORY:
+        history.pop(0)
+
+
+def motion_speed_px(track) -> float:
+    """Hitung kecepatan rata-rata objek dalam pixel/frame."""
+    history = track.get('centroid_history', [])
+    if len(history) < 2:
+        return 0.0
+    moves = [np.hypot(history[i][0]-history[i-1][0],
+                      history[i][1]-history[i-1][1])
+             for i in range(1, len(history))]
+    return sum(moves) / len(moves)
 
 # ══════════════════════════════════════════════════════════════════════
 #  CSV LOGGER
@@ -401,6 +468,8 @@ class IDManager:
             t['last_seen']  = now
             t['missing']    = False
             t['last_on']    = now
+            # Simpan posisi centroid untuk deteksi gerakan
+            update_centroid_history(t)
 
         # Tandai track yang tidak cocok sebagai hilang
         for tid in self.tracks:
@@ -421,19 +490,21 @@ class IDManager:
         # ── Daftarkan deteksi baru yang tidak cocok
         for i in new_idxs:
             d = detections[i]
+            cx0, cy0 = centroid(d['bbox'])
             self.tracks[self._ctr] = {
-                'bbox':       d['bbox'],
-                'conf':       d['conf'],
-                'width_mm':   d['width_mm'],
-                'cls_id':     d['cls_id'],
-                'appearance': d['appearance'],
-                'enter_time': now,
-                'last_seen':  now,
-                'last_on':    now,
-                'off_time':   None,
-                'total_off':  0.0,
-                'missing':    False,
-                'display_id': None,
+                'bbox':             d['bbox'],
+                'conf':             d['conf'],
+                'width_mm':         d['width_mm'],
+                'cls_id':           d['cls_id'],
+                'appearance':       d['appearance'],
+                'enter_time':       now,
+                'last_seen':        now,
+                'last_on':          now,
+                'off_time':         None,
+                'total_off':        0.0,
+                'missing':          False,
+                'display_id':       None,
+                'centroid_history': [(cx0, cy0)],
             }
             self._ctr += 1
 
@@ -463,6 +534,48 @@ class IDManager:
 # ══════════════════════════════════════════════════════════════════════
 #  EVENT LOGGER — terminal + CSV
 # ══════════════════════════════════════════════════════════════════════
+# ══════════════════════════════════════════════════════════════════════
+#  ALERT SUARA
+#  Berbunyi saat ID 1 hilang dari frame (peringatan operator)
+#  Berhenti bunyi saat ID 1 baru terdeteksi
+# ══════════════════════════════════════════════════════════════════════
+import threading
+
+_alert_active   = False   # True = sedang bunyi alert
+_alert_thread   = None    # thread yang menjalankan bunyi
+_alert_stop_evt = threading.Event()  # sinyal untuk hentikan bunyi
+
+def _play_alert():
+    """Bunyi berulang selama _alert_active=True atau sampai di-stop."""
+    try:
+        import winsound
+        while not _alert_stop_evt.is_set():
+            winsound.Beep(880, 400)   # 880 Hz, 400ms
+            _alert_stop_evt.wait(0.6) # jeda 600ms antar bunyi
+    except Exception:
+        pass   # winsound tidak tersedia (non-Windows) — diabaikan
+
+def start_alert():
+    """Mulai bunyi alert ID 1 hilang (non-blocking, background thread)."""
+    global _alert_active, _alert_thread, _alert_stop_evt
+    if _alert_active:
+        return   # sudah bunyi, tidak perlu start lagi
+    _alert_active   = True
+    _alert_stop_evt = threading.Event()
+    _alert_thread   = threading.Thread(target=_play_alert, daemon=True)
+    _alert_thread.start()
+    cp("  [ALERT] ID 1 hilang dari frame — bunyi peringatan aktif", 'rd', 'b')
+
+def stop_alert():
+    """Hentikan bunyi alert (dipanggil saat ID 1 baru terdeteksi)."""
+    global _alert_active
+    if not _alert_active:
+        return
+    _alert_active = False
+    _alert_stop_evt.set()
+    cp("  [ALERT] ID 1 baru terdeteksi — alert dihentikan", 'gr', 'b')
+
+
 class EventLogger:
     def __init__(self, csv_logger: CSVLogger):
         self.csv         = csv_logger
@@ -484,6 +597,9 @@ class EventLogger:
                 self._did_map[iid] = t['display_id']
                 self._state[iid]   = 'active'
                 self.csv.log_masuk(iid, t, now)
+                # Hentikan alert jika ID 1 baru masuk
+                if t['display_id'] == 1:
+                    stop_alert()
 
         # Promosi ID (objek naik/turun antrian)
         for iid, t in tracks.items():
@@ -494,6 +610,9 @@ class EventLogger:
                    f"on {fmt(t['last_on'] - t['enter_time'])}", 'cy', 'b')
                 self.csv.log_promosi(iid, prev, t['display_id'], t, now)
                 self._did_map[iid] = t['display_id']
+                # Hentikan alert jika ada objek yang dipromosikan ke ID 1
+                if t['display_id'] == 1:
+                    stop_alert()
 
         # Objek mulai hilang dari frame
         for iid, t in tracks.items():
@@ -505,6 +624,9 @@ class EventLogger:
                 cp(f"  [{ts()}]  o HILANG   ID {t['display_id']}  "
                    f"| grace {GRACE_SEC:.0f}s", 'yw', 'b')
                 self.csv.log_hilang(iid, t, now)
+                # Alert suara jika ID 1 yang hilang
+                if t['display_id'] == 1:
+                    start_alert()
 
         # Countdown tiap detik untuk objek yang sedang hilang
         for iid, t in tracks.items():
@@ -566,8 +688,17 @@ class EventLogger:
 def draw_tracks(frame, tracks):
     now = time.time()
     for _, t in tracks.items():
+        # Skip objek statis — hanya tampilkan yang bergerak
+        # (atau yang belum punya cukup history untuk dinilai)
+        if not is_moving(t):
+            # Gambar bbox tipis abu-abu sebagai indikator "statis — diabaikan"
+            x1s,y1s,x2s,y2s = [int(v) for v in t['bbox']]
+            cv2.rectangle(frame,(x1s,y1s),(x2s,y2s),(60,60,60),1)
+            cv2.putText(frame,"STATIS",(x1s+4,y1s+16),
+                        cv2.FONT_HERSHEY_SIMPLEX,0.40,(60,60,60),1,cv2.LINE_AA)
+            continue   # tidak masuk antrian track aktif
         did    = t['display_id']
-        color  = COLORS[(did - 1) % len(COLORS)]
+        color  = COLOR_ID1 if did == 1 else COLOR_OTHERS
         x1, y1, x2, y2 = [int(v) for v in t['bbox']]
         miss   = t.get('missing', False)
         miss_s = (now - t['last_seen']) if miss else 0.0
@@ -577,8 +708,9 @@ def draw_tracks(frame, tracks):
         if miss and t.get('off_time'):
             tot_off += now - t['off_time']
         on_dur    = (now - t['enter_time']) - tot_off
-        enter_str = time.strftime('%H:%M:%S', time.localtime(t['enter_time']))
-        lbl       = CLASS_LABEL.get(t.get('cls_id'), '?')
+        enter_str  = time.strftime('%H:%M:%S', time.localtime(t['enter_time']))
+        lbl        = CLASS_LABEL.get(t.get('cls_id'), '?')
+        speed_px   = motion_speed_px(t)   # kecepatan dalam pixel/frame
 
         # ── Bbox: solid jika terdeteksi, putus-putus jika hilang (grace)
         if miss:
@@ -620,8 +752,9 @@ def draw_tracks(frame, tracks):
 
         # ── Info rows di atas bbox
         info_rows = [
-            (f"Masuk: {enter_str}",      color,        (0,0,0)),
-            (f"ON: {fmt(on_dur)}",        (0,180,60),   (255,255,255)),
+            (f"Masuk: {enter_str}",                   color,       (0,0,0)),
+            (f"ON: {fmt(on_dur)}",                    (0,180,60),  (255,255,255)),
+            (f"Kec: {speed_px:.1f}px/f",              (60,160,255),(255,255,255)),
         ]
         if miss and miss_s < GRACE_SEC:
             remain = max(0.0, GRACE_SEC - miss_s)
